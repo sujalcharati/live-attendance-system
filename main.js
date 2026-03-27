@@ -2,13 +2,12 @@ import express from 'express';
 import http from 'http';
 import  {  WebSocketServer } from 'ws';
 import { authMiddleware } from './middleware/auth';
-import {Class, User} from './models'
+import {Attendance, Class, User} from './models'
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
 import { addStudentSchema, classSchema, loginSchema, signupSchema } from './validators';
 import { connection } from './db.js';
-import { success } from 'zod';
-import { error } from 'console';
+
 
 
 const app = express();
@@ -19,9 +18,6 @@ app.use(express.json());
 
 await connection();
 
-// const server = http.createServer(app);
-// const wss = new WebSocketServer(server);
-
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path : "/ws"});
 
@@ -30,13 +26,48 @@ server.listen(port);
 
     
 
-
+let activeSession = null;
 
 // wss.addListener("connection",(data)=>{
 
 //     console.log(" persistence connection started...");
 
 // })
+
+wss.on("connection", (ws,req)=>{
+   
+   const url =  new URL(req.url,"http://localhost");
+   const token = url.searchParams.get("token");
+
+   if(!token){
+
+    ws.send(JSON.stringify({
+      event: "ERROR",
+      data:{
+         message: "Unauthorized or invalid token"
+      }
+    }));
+
+    ws.close();
+    return;
+   }
+
+   const decoded = jwt.verify(token,process.env.YOUR_SECRET);
+
+   if(!decoded){
+    ws.send(JSON.stringify({
+      type:"ERROR",
+      message: " Invalid token"
+    }))
+
+    ws.close();
+    return;
+   }
+
+   ws.user = { userId: decoded.userId, role : decoded.role};
+})
+
+
 
 
 
@@ -359,3 +390,109 @@ app.get('/health' ,( req, res)=>{
 
    })
 
+
+
+ app.post("/attendance/start",authMiddleware, async (req,res)=>{
+
+    if( req.user.role === "student"){
+      return res.status(403).json({
+        success: false,
+        error: "Forbidden, teacher access required"
+      })
+    }
+
+    const { classId } = req.body;
+
+    const classData = await Class.findById(classId);
+
+
+    if( !classData || classData.teacherId !== req.user.userId){
+
+      return res.status(403).json({
+        success:false,
+        error:"you don't own this class"
+      })
+    }
+
+
+
+
+    if( activeSession){
+      return res.status(400).json({
+        success: false,
+        error: "Attendance started already"
+      })
+    }
+
+    activeSession = {
+      classId,
+      teacherId: req.user.userId,
+      studentIds: [],
+      startTime : new Date()
+    }
+
+    return res.status(201).json({
+      success: true,
+      data : {
+        _id: classId,
+        startedAt: startTime
+      }
+    })
+
+ })
+
+
+
+ app.get("/class/:id/my-attendance", authMiddleware, async (req, res)=>{
+     
+
+      if( req.user.role === "teacher"){
+        return res.status(403).json({
+          success: false,
+          error: "Forbidden, student access required"
+        })
+      }
+      
+      const  classId  = req.params.id;
+
+      
+      const classData = await Class.findById(classId);
+      if( !classData){
+        return res.status(404).json({
+          success:false,
+          error: "Class not found"
+        })
+      }
+      const isenrolled = classData.studentIds.some( sId => sId.toString() === req.user.userId.toString());
+
+      if( !isenrolled){
+        return res.status(400).json({
+          success:false,
+          error: "You are not enrolled in class"
+        })
+      }
+
+      const record = await Attendance.findOne({
+        classId:req.params.id,
+        studentId: req.user.userId
+      })
+
+      if(!record){
+        return res.status(200).json({
+          success: true,
+          data: {
+            classId,
+            status: record ? record.status : null
+          }
+        })
+      }
+
+      return res.status(200).json({
+        success:true,
+        data:{
+          classId: classId,
+          status : record.status
+        }
+      })
+
+ })
