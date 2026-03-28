@@ -8,6 +8,7 @@ import bcrypt from 'bcrypt';
 import { addStudentSchema, classSchema, loginSchema, signupSchema } from './validators';
 import { connection } from './db.js';
 import { object } from 'zod';
+import { act } from 'react';
 
 
 
@@ -220,7 +221,32 @@ wss.on("connection", async(ws,req)=>{
         }
       });
 
-      for( )
+      for( const [studentId, status] of Object.entries(activeSession.attendance)){
+        await Attendance.create({ classId: activeSession.classId, studentId, status});
+      }
+
+      const val = object.values(activeSession.attendance);
+      const Present = val.filter( v => v === "present").length;
+      const Absent = val.filter( v => v === "absent").length;
+
+      const Total = Present+Absent;
+
+      activeSession = null;
+
+      wss.clients.forEach( client => {
+
+        if( client.readyState == 1){
+          client.send(JSON.stringify({
+            event:"DONE",
+            data:{
+              "message" :" Attendance persisted",
+              present :Present,
+              absent: Absent,
+              total:Total
+           }
+          }))
+        }
+      })
 
 
         break;
